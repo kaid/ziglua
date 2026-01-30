@@ -35,6 +35,71 @@ pub const lang = config.lang;
 /// The length of Luau vector values, either 3 or 4.
 pub const luau_vector_size = if (config.luau_use_4_vector) 4 else 3;
 
+/// Support Level - API support level inspired by Android API levels
+/// Higher numbers indicate more features available
+pub const Level = enum(u8) {
+    lua51 = 51, // Base level
+    lua52 = 52, // + coroutine yield/k, bitwise, compare, arith
+    lua53 = 53, // + integer type, userdata UV, geti/seti
+    lua54 = 54, // + to-be-closed, generational GC, warn
+    lua55 = 55, // + new parameter semantics (e.g., lua_newstate 3rd param)
+    luajit = 50, // LuaJIT compatible with 5.1 (use 50 to avoid duplicate with lua51)
+    luau = 99, // Luau separate development line, independent from Lua
+};
+
+/// The support level for the current Lua language
+pub const support_level: Level = switch (lang) {
+    .lua51 => .lua51,
+    .lua52 => .lua52,
+    .lua53 => .lua53,
+    .lua54 => .lua54,
+    .lua55 => .lua55,
+    .luajit => .luajit,
+    .luau => .luau,
+};
+
+/// Feature flags for API availability based on support level
+pub const features = struct {
+    /// Level 52+ (and not Luau)
+    pub const has_arith = levelValue() >= 52 and lang != .luau;
+    pub const has_compare = levelValue() >= 52 and lang != .luau;
+    pub const has_continuations = levelValue() >= 52 and lang != .luau;
+    pub const has_yieldk = levelValue() >= 52 and lang != .luau;
+    /// Lua 5.2+ requireF behavior (pushes library table, needs pop)
+    pub const has_requiref_pop = levelValue() >= 52 and lang != .luau;
+
+    /// Level 53+ (and not Luau)
+    pub const has_integer_type = levelValue() >= 53 and lang != .luau;
+    pub const has_userdata_uv = levelValue() >= 53 and lang != .luau;
+    pub const has_geti_seti = levelValue() >= 53 and lang != .luau;
+
+    /// Level 54+
+    pub const has_to_be_closed = levelValue() >= 54;
+    pub const has_generational_gc = levelValue() >= 54;
+    pub const has_warn = levelValue() >= 54;
+    pub const has_transfer_info = levelValue() >= 54;
+
+    /// Level 55+
+    pub const has_newstate_extra_param = levelValue() >= 55;
+    pub const has_dump_writer_null = levelValue() >= 55;
+
+    /// Luau specific
+    pub const has_vector = lang == .luau;
+    pub const has_ref = lang == .luau;
+
+    /// Lua 5.1 specific (not in later versions)
+    pub const has_open_bit32 = lang == .lua51;
+    pub const has_open_package_51 = lang == .lua51;
+    pub const has_open_io_51 = lang == .lua51;
+    /// Lua 5.1/JIT lack some debug info (tail call, upvalues, params)
+    pub const has_limited_debug_info = lang == .lua51 or lang == .luajit;
+
+    /// Helpers
+    inline fn levelValue() u8 {
+        return @intFromEnum(support_level);
+    }
+};
+
 /// This function is defined in luau.cpp and must be called to define the assertion printer
 extern "c" fn zig_registerAssertionHandler() void;
 
@@ -3066,7 +3131,7 @@ pub const Lua = opaque {
                 unreachable;
             };
         }
-        if ((lang == .lua54 or lang == .lua55) and options.r) {
+        if (features.has_transfer_info and options.r) {
             info.first_transfer = ar.ftransfer;
             info.num_transfer = ar.ntransfer;
         }
@@ -3083,7 +3148,7 @@ pub const Lua = opaque {
                 unreachable;
             };
         }
-        if (lang == .lua51 or lang == .luajit) return;
+        if (features.has_limited_debug_info) return;
 
         if (options.t) info.is_tail_call = ar.istailcall != 0;
         if (options.u) {
@@ -4310,7 +4375,7 @@ pub const Lua = opaque {
     /// * Errors: `other`
     pub fn openBase(lua: *Lua) void {
         lua.requireF("_G", c.luaopen_base, true);
-        if (lang == .lua52 or lang == .lua53 or lang == .lua54 or lang == .lua55) lua.pop(1);
+        if (features.has_requiref_pop) lua.pop(1);
     }
 
     /// Open the coroutine standard library
@@ -4322,7 +4387,7 @@ pub const Lua = opaque {
     /// * Errors: `other`
     pub fn openCoroutine(lua: *Lua) void {
         lua.requireF(c.LUA_COLIBNAME, c.luaopen_coroutine, true);
-        if (lang == .lua52 or lang == .lua53 or lang == .lua54 or lang == .lua55) lua.pop(1);
+        if (features.has_requiref_pop) lua.pop(1);
     }
 
     /// Open the package standard library
@@ -4335,7 +4400,7 @@ pub const Lua = opaque {
     pub fn openPackage(lua: *Lua) void {
         if (lang == .luau) @compileError(@src().fn_name ++ " is not available in Luau.");
         lua.requireF(c.LUA_LOADLIBNAME, c.luaopen_package, true);
-        if (lang == .lua52 or lang == .lua53 or lang == .lua54 or lang == .lua55) lua.pop(1);
+        if (features.has_requiref_pop) lua.pop(1);
     }
 
     /// Open the string standard library
@@ -4345,7 +4410,7 @@ pub const Lua = opaque {
     /// * Errors: `other`
     pub fn openString(lua: *Lua) void {
         lua.requireF(c.LUA_STRLIBNAME, c.luaopen_string, true);
-        if (lang == .lua52 or lang == .lua53 or lang == .lua54 or lang == .lua55) lua.pop(1);
+        if (features.has_requiref_pop) lua.pop(1);
     }
 
     /// Open the UTF-8 standard library
@@ -4357,7 +4422,7 @@ pub const Lua = opaque {
     /// * Errors: `other`
     pub fn openUtf8(lua: *Lua) void {
         lua.requireF(c.LUA_UTF8LIBNAME, c.luaopen_utf8, true);
-        if (lang == .lua52 or lang == .lua53 or lang == .lua54 or lang == .lua55) lua.pop(1);
+        if (features.has_requiref_pop) lua.pop(1);
     }
 
     /// Open the table standard library
@@ -4367,7 +4432,7 @@ pub const Lua = opaque {
     /// * Errors: `other`
     pub fn openTable(lua: *Lua) void {
         lua.requireF(c.LUA_TABLIBNAME, c.luaopen_table, true);
-        if (lang == .lua52 or lang == .lua53 or lang == .lua54 or lang == .lua55) lua.pop(1);
+        if (features.has_requiref_pop) lua.pop(1);
     }
 
     /// Open the math standard library
@@ -4377,7 +4442,7 @@ pub const Lua = opaque {
     /// * Errors: `other`
     pub fn openMath(lua: *Lua) void {
         lua.requireF(c.LUA_MATHLIBNAME, c.luaopen_math, true);
-        if (lang == .lua52 or lang == .lua53 or lang == .lua54 or lang == .lua55) lua.pop(1);
+        if (features.has_requiref_pop) lua.pop(1);
     }
 
     /// Open the io standard library
@@ -4390,7 +4455,7 @@ pub const Lua = opaque {
     pub fn openIO(lua: *Lua) void {
         if (lang == .luau) @compileError(@src().fn_name ++ " is not available in Luau.");
         lua.requireF(c.LUA_IOLIBNAME, c.luaopen_io, true);
-        if (lang == .lua52 or lang == .lua53 or lang == .lua54 or lang == .lua55) lua.pop(1);
+        if (features.has_requiref_pop) lua.pop(1);
     }
 
     /// Open the os standard library
@@ -4400,7 +4465,7 @@ pub const Lua = opaque {
     /// * Errors: `other`
     pub fn openOS(lua: *Lua) void {
         lua.requireF(c.LUA_OSLIBNAME, c.luaopen_os, true);
-        if (lang == .lua52 or lang == .lua53 or lang == .lua54 or lang == .lua55) lua.pop(1);
+        if (features.has_requiref_pop) lua.pop(1);
     }
 
     /// Open the debug standard library
@@ -4410,7 +4475,7 @@ pub const Lua = opaque {
     /// * Errors: `other`
     pub fn openDebug(lua: *Lua) void {
         lua.requireF(c.LUA_DBLIBNAME, c.luaopen_debug, true);
-        if (lang == .lua52 or lang == .lua53 or lang == .lua54 or lang == .lua55) lua.pop(1);
+        if (features.has_requiref_pop) lua.pop(1);
     }
 
     /// Open the bit32 standard library
@@ -4440,7 +4505,7 @@ pub const Lua = opaque {
     pub fn openVector(lua: *Lua) void {
         if (lang == .luau) @compileError(@src().fn_name ++ " is only available in Luau.");
         lua.requireF(c.LUA_VECLIBNAME, c.luaopen_vector, true);
-        if (lang == .lua52 or lang == .lua53 or lang == .lua54 or lang == .lua55) lua.pop(1);
+        if (features.has_requiref_pop) lua.pop(1);
     }
 
     /// Returns if given typeinfo is a string type
@@ -5386,7 +5451,7 @@ pub fn wrap(comptime function: anytype) TypeOfWrap(function) {
         CWriterFn => struct {
             fn inner(state: ?*LuaState, buf: ?*const anyopaque, size: usize, data: ?*anyopaque) callconv(.c) c_int {
                 // Lua 5.5 calls the writer with null at the end of dump
-                if (lang == .lua55 and buf == null) return 0;
+                if (features.has_dump_writer_null and buf == null) return 0;
                 // this is called by Lua, state should never be null
                 var lua: *Lua = @ptrCast(state.?);
                 const buffer = @as([*]const u8, @ptrCast(buf))[0..size];
